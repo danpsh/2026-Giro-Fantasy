@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Scrape Tour de France stage results from ProCyclingStats into the column layout
-the Fantasy Cycling engine expects (tdf-results.xlsx).
-
-Verbose/diagnostic build: prints exactly what the procyclingstats library
-returns so we can confirm method names and field keys.
+DIAGNOSTIC build. Figures out why scraping returns nothing:
+  1) prints the installed procyclingstats version
+  2) does a raw HTTP request to PCS (with a browser User-Agent) and reports the
+     status code + a snippet  -> tells us if PCS is blocking the runner
+  3) tries the library and prints the FULL error to stdout (not stderr)
+If the library works it still writes the results file.
 
     pip install procyclingstats openpyxl
     YEAR=2025 OUT=tdf-results-2025-test.xlsx python scripts/scrape_tdf.py
@@ -12,29 +13,74 @@ returns so we can confirm method names and field keys.
 import os
 import sys
 import traceback
+import urllib.request
 
-import procyclingstats
-from procyclingstats import Stage
 from openpyxl import Workbook
 
 YEAR = os.environ.get("YEAR", "2026")
 OUT = os.environ.get("OUT", "tdf-results.xlsx")
 RACE = os.environ.get("RACE_SLUG", "tour-de-france")
 MAX_STAGES = int(os.environ.get("MAX_STAGES", "21"))
+UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 
-print(f"procyclingstats version: {getattr(procyclingstats, '__version__', '?')}")
+print("=== ENV ===")
 print(f"YEAR={YEAR} OUT={OUT} RACE={RACE}")
+try:
+    from importlib.metadata import version
+    print("procyclingstats version:", version("procyclingstats"))
+except Exception as e:
+    print("version lookup failed:", e)
 
-HEADER = (
-    ["Date", "Stage"]
-    + ["1st", "2nd", "3rd", "4th", "5th", "6th", "7th", "8th", "9th", "10th"]
-    + [f"GC #{i}" for i in range(1, 11)]
-    + [f"Points #{i}" for i in range(1, 4)]
-    + [f"Mountain #{i}" for i in range(1, 4)]
-    + [f"Youth #{i}" for i in range(1, 4)]
-)
+# ---- raw probe ----
+def probe(url):
+    full = "https://www.procyclingstats.com/" + url
+    print(f"\n=== RAW PROBE {full} ===")
+    try:
+        req = urllib.request.Request(full, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=25) as r:
+            body = r.read().decode("utf-8", "replace")
+            print(f"HTTP {r.status}, {len(body)} bytes")
+            low = body.lower()
+            print("looks like results table:", ("resulttable" in low or 'class="results' in low or "<table" in low))
+            print("looks blocked (cf/captcha):", ("cloudflare" in low or "captcha" in low or "just a moment" in low))
+            print("snippet:", " ".join(body[:300].split()))
+    except Exception as e:
+        print("RAW PROBE ERROR:", e)
 
+probe(f"race/{RACE}/{YEAR}/stage-1")
 
+# ---- library attempt ----
+print("\n=== LIBRARY ATTEMPT (stage 1) ===")
+Stage = None
+try:
+    from procyclingstats import Stage as _Stage
+    Stage = _Stage
+except Exception:
+    print("import procyclingstats FAILED:")
+    traceback.print_exc(file=sys.stdout)
+
+if Stage:
+    try:
+        s = Stage(f"race/{RACE}/{YEAR}/stage-1")
+        try:
+            p = s.parse()
+            print("parse() keys:", list(p.keys()) if isinstance(p, dict) else type(p))
+        except Exception:
+            print("parse() traceback:")
+            traceback.print_exc(file=sys.stdout)
+        try:
+            res = s.results()
+            print("results() type:", type(res), "len:", len(res) if res else 0)
+            if res:
+                print("first result row:", res[0])
+        except Exception:
+            print("results() traceback:")
+            traceback.print_exc(file=sys.stdout)
+    except Exception:
+        print("Stage() construction traceback:")
+        traceback.print_exc(file=sys.stdout)
+
+# ---- name helpers ----
 def fmt_name(pcs_name):
     if not pcs_name:
         return ""
@@ -43,17 +89,14 @@ def fmt_name(pcs_name):
     given = [t for t in toks if t != t.upper()]
     return (" ".join(given) + " " + " ".join(w.capitalize() for w in surname)).strip()
 
-
 def name_of(row):
-    """Pull the rider's display name from a result row, whatever the key is called."""
     if isinstance(row, dict):
         for k in ("rider_name", "rider", "name"):
             if row.get(k):
                 return row[k]
     return ""
 
-
-def rank_of(row, fallback):
+def rank_of(row, fb):
     if isinstance(row, dict):
         for k in ("rank", "position", "place"):
             if row.get(k) not in (None, ""):
@@ -61,21 +104,7 @@ def rank_of(row, fallback):
                     return int(row[k])
                 except (TypeError, ValueError):
                     pass
-    return fallback
-
-
-def get_classification(stage, method_name, parsed):
-    """Return a list of result rows for a classification, trying the method then parse()."""
-    try:
-        v = getattr(stage, method_name)()
-        if v:
-            return v
-    except Exception as e:
-        print(f"    .{method_name}() raised: {e}", file=sys.stderr)
-    if isinstance(parsed, dict) and parsed.get(method_name):
-        return parsed[method_name]
-    return []
-
+    return fb
 
 def ranked(rows, n):
     out = [""] * n
@@ -85,68 +114,44 @@ def ranked(rows, n):
             out[r - 1] = fmt_name(name_of(row))
     return out
 
-
-def scrape_stage(n, verbose):
-    url = f"race/{RACE}/{YEAR}/stage-{n}"
-    stage = Stage(url)
-    parsed = None
+def cls(stage, m):
     try:
-        parsed = stage.parse()
-        if verbose:
-            keys = list(parsed.keys()) if isinstance(parsed, dict) else type(parsed)
-            print(f"  parse() keys: {keys}")
-    except Exception as e:
-        if verbose:
-            print(f"  parse() raised: {e}", file=sys.stderr)
-
-    results = get_classification(stage, "results", parsed)
-    if verbose and results:
-        print(f"  first result row: {results[0]}")
-    if not results:
-        return None
-
-    try:
-        date = stage.date()
+        return getattr(stage, m)() or []
     except Exception:
-        date = (parsed or {}).get("date", "") if isinstance(parsed, dict) else ""
+        return []
 
-    row = [date, n]
-    row += ranked(results, 10)
-    row += ranked(get_classification(stage, "gc", parsed), 10)
-    row += ranked(get_classification(stage, "points", parsed), 3)
-    row += ranked(get_classification(stage, "kom", parsed), 3)
-    row += ranked(get_classification(stage, "youth", parsed), 3)
-    return row
-
+HEADER = (["Date", "Stage"] + ["1st","2nd","3rd","4th","5th","6th","7th","8th","9th","10th"]
+          + [f"GC #{i}" for i in range(1,11)] + [f"Points #{i}" for i in range(1,4)]
+          + [f"Mountain #{i}" for i in range(1,4)] + [f"Youth #{i}" for i in range(1,4)])
 
 def main():
+    if not Stage:
+        return
     rows = []
     for n in range(1, MAX_STAGES + 1):
         try:
-            r = scrape_stage(n, verbose=(n == 1))
+            st = Stage(f"race/{RACE}/{YEAR}/stage-{n}")
+            results = cls(st, "results")
+            if not results:
+                continue
+            try:
+                date = st.date()
+            except Exception:
+                date = ""
+            row = [date, n] + ranked(results, 10) + ranked(cls(st, "gc"), 10) \
+                + ranked(cls(st, "points"), 3) + ranked(cls(st, "kom"), 3) + ranked(cls(st, "youth"), 3)
+            rows.append(row)
+            print(f"stage {n}: {date} winner {row[2]}")
         except Exception as e:
-            print(f"stage {n}: ERROR {e}", file=sys.stderr)
-            traceback.print_exc()
-            r = None
-        if r is None:
-            print(f"stage {n}: no results")
-            continue
-        print(f"stage {n}: {r[0]} winner {r[2]}")
-        rows.append(r)
-
+            print(f"stage {n}: error {e}")
     if not rows:
-        print("No completed stages found; nothing written.")
+        print("\nNo completed stages found; nothing written.")
         return
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Results"
-    ws.append(HEADER)
+    wb = Workbook(); ws = wb.active; ws.title = "Results"; ws.append(HEADER)
     for r in rows:
         ws.append(r)
     wb.save(OUT)
-    print(f"Wrote {len(rows)} stage(s) to {OUT}")
-
+    print(f"\nWrote {len(rows)} stage(s) to {OUT}")
 
 if __name__ == "__main__":
     main()
