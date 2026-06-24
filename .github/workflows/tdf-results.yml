@@ -1,0 +1,55 @@
+name: Scrape TdF results
+
+# Builds tdf-results.xlsx from ProCyclingStats and opens a PR for review.
+# - Runs automatically each evening during July (after stages finish).
+# - Can also be run on demand: Actions tab -> "Scrape TdF results" -> Run workflow
+#   (set year=2025 + out=tdf-results-2025-test.xlsx to validate against last year).
+
+on:
+  schedule:
+    - cron: "0 19 * 7 *"   # 19:00 UTC daily in July (~2pm CT)
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "Race year"
+        default: "2026"
+        required: true
+      out:
+        description: "Output file"
+        default: "tdf-results.xlsx"
+        required: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: pip install procyclingstats openpyxl
+
+      - name: Scrape results
+        env:
+          YEAR: ${{ github.event.inputs.year || '2026' }}
+          OUT: ${{ github.event.inputs.out || 'tdf-results.xlsx' }}
+        run: python scripts/scrape_tdf.py
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "Update TdF results (${{ github.event.inputs.out || 'tdf-results.xlsx' }})"
+          title: "TdF results update"
+          body: |
+            Automated scrape from ProCyclingStats.
+            Review the rider names/points, then merge to publish to the standings.
+          branch: tdf-results-update
+          add-paths: |
+            ${{ github.event.inputs.out || 'tdf-results.xlsx' }}
