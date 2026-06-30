@@ -232,10 +232,6 @@ window.TDF_STARTLIST = {
     "team": "Lidl-Trek"
   },
   {
-    "name": "Giulio Ciccone",
-    "team": "Lidl-Trek"
-  },
-  {
     "name": "Mathias Vacek",
     "team": "Lidl-Trek"
   },
