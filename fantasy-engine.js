@@ -111,9 +111,11 @@
   /* ---------- Grand Tour scoring ---------- */
   const GT_SCORING = {
     'GC Standing': { 1: 40, 2: 35, 3: 30, 4: 25, 5: 20, 6: 18, 7: 16, 8: 14, 9: 12, 10: 10 },
-    'Stage Result': { 1: 12, 2: 10, 3: 9, 4: 8, 5: 7, 6: 6, 7: 5, 8: 4, 9: 3, 10: 2, 11: 1, 12: 1 },
+    'Stage Result': { 1: 12, 2: 10, 3: 8, 4: 6, 5: 5, 6: 4, 7: 3, 8: 2, 9: 1, 10: 1 },
     'Jersey': { 1: 12, 2: 8, 3: 4 }
   };
+  // TdF-only stage scoring (adopted for 2026 TdF only — Giro/Vuelta keep the default above)
+  const TDF_STAGE_SCORING = { 1: 12, 2: 10, 3: 9, 4: 8, 5: 7, 6: 6, 7: 5, 8: 4, 9: 3, 10: 2, 11: 1, 12: 1 };
   const REPL = { 1: 1, 2: 1, 3: 1, 4: .9, 5: .9, 6: .8, 7: .8, 8: .7, 9: .7, 10: .6, 11: .6, 12: .6, 13: .5, 14: .5, 15: .5, 16: .5, 17: .5, 18: .5, 19: .5, 20: .5 };
   // Replacement-penalty cutoff: subs added ON OR AFTER this date score reduced GC + zero
   // jersey. Per-race (passed via cfg.repcut); this is only the fallback default.
@@ -159,8 +161,9 @@
     const latest = Math.max(...allStages);
 
     const byMatch = {}; riders.forEach(r => { (byMatch[r.match_name] = byMatch[r.match_name] || []).push(r); });
+    const STAGE_SCORE = cfg.stageScoring || GT_SCORING['Stage Result'];
     const calc = (cat, rank, r) => {
-      const tbl = GT_SCORING[cat] || GT_SCORING.Jersey; const base = tbl[rank] || 0; const isJ = cat.indexOf('Jersey') >= 0;
+      const tbl = cat === 'Stage Result' ? STAGE_SCORE : (GT_SCORING[cat] || GT_SCORING.Jersey); const base = tbl[rank] || 0; const isJ = cat.indexOf('Jersey') >= 0;
       if (r.is_replacement && parseDate(r.add_date) >= REPCUT) {
         if (cat === 'Stage Result') return base;
         if (isJ) return 0;
@@ -245,7 +248,7 @@
     const owned = new Set(riders.map(r => r.match_name));
     const faMap = {};
     raw.filter(e => (e.Category === 'Stage Result' || e.Stage === latest) && !owned.has(e.match_name))
-      .forEach(e => { const tbl = GT_SCORING[e.Category] || GT_SCORING.Jersey; faMap[e.res_rider] = (faMap[e.res_rider] || 0) + (tbl[e.rank] || 0); });
+      .forEach(e => { const tbl = e.Category === 'Stage Result' ? STAGE_SCORE : (GT_SCORING[e.Category] || GT_SCORING.Jersey); faMap[e.res_rider] = (faMap[e.res_rider] || 0) + (tbl[e.rank] || 0); });
     const freeAgents = Object.keys(faMap).map(name => ({ name, pts: r1(faMap[name]) })).filter(x => x.pts > 0).sort((a, b) => b.pts - a.pts);
 
     // stages
@@ -380,7 +383,7 @@
 
   const GT_CONFIG = {
     giro: { riders: 'giro-riders.csv', results: 'giro-results.xlsx', race: "Giro d'Italia", year: 2026, repcut: Date.UTC(2026, 4, 16) },
-    tdf: { riders: 'tdf-riders.csv', results: 'tdf-results.xlsx', race: 'Tour de France', year: 2026, repcut: Date.UTC(2026, 6, 14) },
+    tdf: { riders: 'tdf-riders.csv', results: 'tdf-results.xlsx', race: 'Tour de France', year: 2026, repcut: Date.UTC(2026, 6, 14), stageScoring: TDF_STAGE_SCORING },
     vuelta: { riders: 'vuelta-riders.csv', results: 'vuelta-results.xlsx', race: 'Vuelta a España', year: 2026, repcut: Date.UTC(2026, 8, 1) }
   };
 
@@ -452,6 +455,7 @@
   // the latest stage (snapshot). Returns ranked rows with a points breakdown.
   function computeRiderLeaderboard(resultsRows, cfg) {
     cfg = cfg || {};
+    const STAGE_SCORE = cfg.stageScoring || GT_SCORING['Stage Result'];
     const resObjs = rowsToObjs(resultsRows);
     const raw = [], stageMeta = [];
     for (const sd of resObjs) {
@@ -469,7 +473,7 @@
     const by = {}; // displayName key -> agg
     for (const e of raw) {
       if (e.cat !== 'Stage Result' && e.Stage !== latest) continue; // snapshot for GC/jersey
-      const tbl = GT_SCORING[e.cat] || GT_SCORING.Jersey; const pts = tbl[e.rank] || 0;
+      const tbl = e.cat === 'Stage Result' ? STAGE_SCORE : (GT_SCORING[e.cat] || GT_SCORING.Jersey); const pts = tbl[e.rank] || 0;
       if (!pts) continue;
       const k = norm(e.rider);
       const o = by[k] || (by[k] = { name: e.rider, sr: 0, gc: 0, jer: 0, sw: 0, podiums: 0, gcRank: 99, ptsJer: 0, komJer: 0, ythJer: 0 });
