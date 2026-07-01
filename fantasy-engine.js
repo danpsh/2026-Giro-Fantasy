@@ -378,8 +378,8 @@
   }
 
   /* ---------- loaders ---------- */
-  async function fetchText(url) { const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url); return r.text(); }
-  async function fetchBuf(url) { const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url); return r.arrayBuffer(); }
+  async function fetchText(url) { const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url); return r.text(); }
+  async function fetchBuf(url) { const r = await fetch(url, { cache: 'no-store' }); if (!r.ok) throw new Error('HTTP ' + r.status + ' ' + url); return r.arrayBuffer(); }
 
   const GT_CONFIG = {
     giro: { riders: 'giro-riders.csv', results: 'giro-results.xlsx', race: "Giro d'Italia", year: 2026, repcut: Date.UTC(2026, 4, 16) },
